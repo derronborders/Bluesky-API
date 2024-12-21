@@ -140,11 +140,11 @@ def save_to_csv(data, filename):
 
         flat_data.append(row)
 
-    # Dynamically collect all keys (fieldnames) from the data
-    target_keys = sorted([key for key in flat_data[0].keys() if key.startswith("Target_")])
-    parent_keys = sorted([key for key in flat_data[0].keys() if key.startswith("Parent_")])
-    reply_keys = sorted([key for key in flat_data[0].keys() if key.startswith("Reply_")])
-    all_keys = target_keys + parent_keys + reply_keys
+    # Dynamically collect all keys (fieldnames) from all rows
+    all_keys = set()
+    for row in flat_data:
+        all_keys.update(row.keys())
+    all_keys = sorted(all_keys)  # Sort for consistent ordering
 
     # Ensure all rows contain all keys (fill missing fields with None)
     for row in flat_data:
@@ -162,15 +162,14 @@ def save_to_csv(data, filename):
 
 # Main script
 if __name__ == "__main__":
-    variations = [
-        "example", "example variation"]
+    variations = ["example", "example variation"]
     sort = "latest"
     lang = "en"
     limit = 100
 
     # Set date range
-    start_date = datetime(2023, 7, 2)
-    end_date = datetime(2024, 12, 19)
+    start_date = datetime(2024, 11, 6)
+    end_date = datetime(2024, 11, 9)
     delta = timedelta(days=1)
 
     threads = []
