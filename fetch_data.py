@@ -141,11 +141,15 @@ def save_to_csv(data, filename):
         flat_data.append(row)
 
     # Collect all keys to ensure consistent ordering
-    all_keys = set(key for row in flat_data for key in row.keys())
+    all_keys = (
+        sorted([key for key in flat_data[0].keys() if key.startswith("Target_")]) +
+        sorted([key for key in flat_data[0].keys() if key.startswith("Parent_")]) +
+        sorted([key for key in flat_data[0].keys() if key.startswith("Reply_")])
+    )
 
     # Save to CSV
     with open(filename, "w", newline="", encoding="utf-8") as output_file:
-        dict_writer = csv.DictWriter(output_file, fieldnames=sorted(all_keys))
+        dict_writer = csv.DictWriter(output_file, fieldnames=all_keys)
         dict_writer.writeheader()
         dict_writer.writerows(flat_data)
 
@@ -161,7 +165,7 @@ if __name__ == "__main__":
 
     # Set date range
     start_date = datetime(2023, 7, 2)
-    end_date = datetime(2024, 12, 20)
+    end_date = datetime(2024, 12, 19)
     delta = timedelta(days=1)
 
     threads = []
@@ -199,5 +203,5 @@ if __name__ == "__main__":
             current_date += delta
 
     # Save to CSV
-    save_to_csv(threads, "bluesky_raw_data.csv")
+    save_to_csv(threads, "bluesky_grouped_query_data.csv")
     print("Script complete.")
