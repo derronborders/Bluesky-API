@@ -47,26 +47,52 @@ def fetch_thread_details(uri):
         return None
 
 # Updated function to extract embeds
-def extract_embeds(record, embed_type):
+def extract_embeds(record, embed_type, did=None):
     # Check if "embed" exists and is not empty
     if "embed" not in record or not record["embed"]:
         return []  # No embed data available
 
     embed = record["embed"]
 
-    # Handle top-level embeds
-    if embed_type == "image" and "images" in embed:
-        return [image.get("src", "") for image in embed.get("images", []) if image.get("src")]
-    elif embed_type == "link" and "link" in embed:
-        return [embed["link"].get("href", "")] if "href" in embed["link"] else []
+    # Use the provided DID if available, fallback to the record DID
+    did = did or record.get("did", "").strip()
+    if did.startswith("did:"):
+        did = did[4:]  # Remove redundant "did:" if already included
 
-    # Handle nested embeds
-    if "record" in embed:
-        nested_record = embed["record"]
-        if embed_type == "image" and "images" in nested_record:
-            return [image.get("src", "") for image in nested_record.get("images", []) if image.get("src")]
-        elif embed_type == "link" and "link" in nested_record:
-            return [nested_record["link"].get("href", "")] if "href" in nested_record["link"] else []
+    # Handle image embeds
+    if embed_type == "image" and embed.get("$type") == "app.bsky.embed.images":
+        images = embed.get("images", [])
+        return [
+            f"https://cdn.bsky.app/img/feed_thumbnail/plain/did:{did}/{image['image']['ref']['$link']}@{image['image']['mimeType'].split('/')[-1]}"
+            for image in images
+            if "image" in image and "ref" in image["image"] and "mimeType" in image["image"]
+        ]
+
+    # Handle external (website) embeds
+    elif embed_type == "link" and embed.get("$type") == "app.bsky.embed.external":
+        external = embed.get("external", {})
+        uri = external.get("uri", "")
+        if uri:
+            return [uri]  # Return the external link
+
+    # Handle record embeds (referenced posts)
+    elif embed_type == "record" and embed.get("$type") == "app.bsky.embed.record":
+        record = embed.get("record", {})
+        uri = record.get("uri", "")
+        if uri.startswith("at://"):
+            profile = uri.split("/")[2]
+            post_id = uri.split("/")[-1]
+            return [f"https://bsky.app/profile/{profile}/post/{post_id}"]
+        return []
+
+    # Handle media links within nested records
+    if embed.get("$type") == "app.bsky.embed.recordWithMedia":
+        nested_embeds = []
+        if "record" in embed:
+            nested_embeds.extend(extract_embeds(embed["record"], embed_type, did))
+        if "media" in embed:
+            nested_embeds.extend(extract_embeds(embed["media"], embed_type, did))
+        return nested_embeds
 
     # If no valid data is found
     return []
@@ -78,25 +104,33 @@ def extract_post_data(post):
     record = post.get("record", {})
     author = post.get("author", {})
 
-    # Debug: Check for missing or empty image embeds
-    image_embeds = extract_embeds(record, "image")
-    if not image_embeds or all(not img for img in image_embeds):
-        print("Debug: Missing or empty image embeds found.")
-        print("Raw embed data:", record.get("embed", {}))
+    # Construct link to the post itself
+    post_uri = record.get("uri", "")
+    post_link = ""
+    if post_uri.startswith("at://"):
+        profile = post_uri.split("/")[2]
+        post_id = post_uri.split("/")[-1]
+        post_link = f"https://bsky.app/profile/{profile}/post/{post_id}"
+
+    # Construct link to the author's profile
+    handle = author.get("handle", "")
+    handle_link = f"https://bsky.app/profile/{handle}" if handle else ""
 
     return {
+        "Post Link": post_link,
         "DID": author.get("did", ""),
-        "Handle": author.get("handle", ""),
+        "Handle": handle_link,
         "Display Name": author.get("displayName", ""),
         "CreatedAt": record.get("createdAt", ""),
         "Text": record.get("text", ""),
+        "Text Post Link": post_link,
         "ReplyCount": post.get("replyCount", 0),
         "RepostCount": post.get("repostCount", 0),
         "LikeCount": post.get("likeCount", 0),
         "QuoteCount": post.get("quoteCount", 0),
-        "Image Embeds": image_embeds,
-        "Website Card Embeds": extract_embeds(record, "link"),
-        "Referenced Posts": extract_embeds(record, "record"),
+        "Image Embeds": ", ".join(extract_embeds(record, "image", author.get("did", ""))),
+        "Website Card Embeds": ", ".join(extract_embeds(record, "link")),
+        "Referenced Posts": ", ".join(extract_embeds(record, "record")),
     }
 
 # Function to process the post, parent, and replies
@@ -175,15 +209,14 @@ def save_to_csv(data, filename):
 
 # Main script
 if __name__ == "__main__":
-    variations = [
-        "example", "example variation"]
+    variations = ["example", "example variation"]
     sort = "latest"
     lang = "en"
     limit = 100
 
     # Set date range
-    start_date = datetime(2024, 11, 6)
-    end_date = datetime(2024, 11, 9)
+    start_date = datetime(2023, 7, 1)
+    end_date = datetime(2024, 12, 22)
     delta = timedelta(days=1)
 
     threads = []
@@ -221,5 +254,5 @@ if __name__ == "__main__":
             current_date += delta
 
     # Save to CSV
-    save_to_csv(threads, "bluesky_grouped_query_data.csv")
+    save_to_csv(threads, "bluesky_raw_data.csv")
     print("Script complete.")
