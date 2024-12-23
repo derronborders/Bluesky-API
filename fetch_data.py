@@ -46,12 +46,43 @@ def fetch_thread_details(uri):
         print(f"Skipping URI {uri} due to network error: {e}")
         return None
 
+# Updated function to extract embeds
+def extract_embeds(record, embed_type):
+    # Check if "embed" exists and is not empty
+    if "embed" not in record or not record["embed"]:
+        return []  # No embed data available
+
+    embed = record["embed"]
+
+    # Handle top-level embeds
+    if embed_type == "image" and "images" in embed:
+        return [image.get("src", "") for image in embed.get("images", []) if image.get("src")]
+    elif embed_type == "link" and "link" in embed:
+        return [embed["link"].get("href", "")] if "href" in embed["link"] else []
+
+    # Handle nested embeds
+    if "record" in embed:
+        nested_record = embed["record"]
+        if embed_type == "image" and "images" in nested_record:
+            return [image.get("src", "") for image in nested_record.get("images", []) if image.get("src")]
+        elif embed_type == "link" and "link" in nested_record:
+            return [nested_record["link"].get("href", "")] if "href" in nested_record["link"] else []
+
+    # If no valid data is found
+    return []
+
 # Function to extract post data
 def extract_post_data(post):
     if not post:
         return None
     record = post.get("record", {})
     author = post.get("author", {})
+
+    # Debug: Check for missing or empty image embeds
+    image_embeds = extract_embeds(record, "image")
+    if not image_embeds or all(not img for img in image_embeds):
+        print("Debug: Missing or empty image embeds found.")
+        print("Raw embed data:", record.get("embed", {}))
 
     return {
         "DID": author.get("did", ""),
@@ -63,28 +94,10 @@ def extract_post_data(post):
         "RepostCount": post.get("repostCount", 0),
         "LikeCount": post.get("likeCount", 0),
         "QuoteCount": post.get("quoteCount", 0),
-        "Image Embeds": extract_embeds(record, "image"),
+        "Image Embeds": image_embeds,
         "Website Card Embeds": extract_embeds(record, "link"),
+        "Referenced Posts": extract_embeds(record, "record"),
     }
-
-# Helper function to extract embeds
-def extract_embeds(record, embed_type):
-    if "embed" not in record:
-        return []
-
-    embed = record["embed"]
-    
-    if embed_type == "image" and "images" in embed:
-        return [image.get("src", "") for image in embed["images"]]
-    elif embed_type == "link" and "link" in embed:
-        return [embed["link"].get("href", "")]
-    elif "record" in embed:
-        nested_record = embed["record"]
-        if embed_type == "image" and "images" in nested_record:
-            return [image.get("src", "") for image in nested_record["images"]]
-        elif embed_type == "link" and "link" in nested_record:
-            return [nested_record["link"].get("href", "")]
-    return []
 
 # Function to process the post, parent, and replies
 def process_thread(post):
@@ -162,7 +175,8 @@ def save_to_csv(data, filename):
 
 # Main script
 if __name__ == "__main__":
-    variations = ["example", "example variation"]
+    variations = [
+        "example", "example variation"]
     sort = "latest"
     lang = "en"
     limit = 100
