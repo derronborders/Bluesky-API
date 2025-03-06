@@ -1,258 +1,147 @@
-import requests  # type: ignore
 import csv
 from datetime import datetime, timedelta
+from atproto import Client, models
 import time
 
-# Function to fetch posts
-def search_bluesky_posts(query, sort="latest", since=None, until=None, lang=None, limit=100, cursor=None):
-    url = "https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts"
-    params = {
-        "q": query,
-        "sort": sort,
-        "since": since,
-        "until": until,
-        "lang": lang,
-        "limit": limit,
-        "cursor": cursor,
-    }
+def login_bluesky(client):
+    """Authenticate with Bluesky"""
     try:
-        response = requests.get(url, params=params)
-        if response.status_code == 200:
-            data = response.json()
-            return data.get("posts", []), data.get("cursor", None)
-        else:
-            print(f"Error: Received status code {response.status_code}")
-            return [], None
-    except requests.exceptions.RequestException as e:
-        print(f"Network error occurred: {e}")
-        return [], None
+        client.login(
+            'bskyresearch.bsky.social',  # No parameter name needed
+            'Grieving-Manly-Chug1-Isolation-Manifesto-Shelf'
+        )
+        print("Login successful!")
+        return True
+    except Exception as e:
+        print(f"Login failed: {e}")
+        return False
 
-# Function to fetch thread details
-def fetch_thread_details(uri):
-    if not uri:
-        return None
-    url = "https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread"
-    params = {"uri": uri}
-    try:
-        response = requests.get(url, params=params)
-        if response.status_code == 200:
-            thread = response.json()
-            if "thread" in thread and "post" in thread["thread"]:
-                return thread["thread"]
-        else:
-            print(f"Skipping URI {uri} due to status code {response.status_code}")
-            return None
-    except requests.exceptions.RequestException as e:
-        print(f"Skipping URI {uri} due to network error: {e}")
-        return None
+def fetch_dated_posts(client, start_date, end_date):
+    """Fetch posts about moderation within a date range"""
+    posts_data = []
+    current_date = start_date
+    
+    while current_date <= end_date:
+        day_str = current_date.strftime('%Y-%m-%d')
+        print(f"Processing {day_str}")
+        cursor = None
+        daily_count = 0
+        
+        while True:
+            try:
+                # Set time range for this day
+                since = current_date.isoformat() + "Z"
+                until = (current_date + timedelta(days=1)).isoformat() + "Z"
+                
+                params = {
+                    'q': 'moderation',
+                    'limit': 100,
+                    'since': since,
+                    'until': until
+                }
+                if cursor:
+                    params['cursor'] = cursor
 
-# Updated function to extract embeds
-def extract_embeds(record, embed_type, did=None):
-    # Check if "embed" exists and is not empty
-    if "embed" not in record or not record["embed"]:
-        return []  # No embed data available
-
-    embed = record["embed"]
-
-    # Use the provided DID if available, fallback to the record DID
-    did = did or record.get("did", "").strip()
-    if did.startswith("did:"):
-        did = did[4:]  # Remove redundant "did:" if already included
-
-    # Handle image embeds
-    if embed_type == "image" and embed.get("$type") == "app.bsky.embed.images":
-        images = embed.get("images", [])
-        return [
-            f"https://cdn.bsky.app/img/feed_thumbnail/plain/did:{did}/{image['image']['ref']['$link']}@{image['image']['mimeType'].split('/')[-1]}"
-            for image in images
-            if "image" in image and "ref" in image["image"] and "mimeType" in image["image"]
-        ]
-
-    # Handle external (website) embeds
-    elif embed_type == "link" and embed.get("$type") == "app.bsky.embed.external":
-        external = embed.get("external", {})
-        uri = external.get("uri", "")
-        if uri:
-            return [uri]  # Return the external link
-
-    # Handle record embeds (referenced posts)
-    elif embed_type == "record" and embed.get("$type") == "app.bsky.embed.record":
-        record = embed.get("record", {})
-        uri = record.get("uri", "")
-        if uri.startswith("at://"):
-            profile = uri.split("/")[2]
-            post_id = uri.split("/")[-1]
-            return [f"https://bsky.app/profile/{profile}/post/{post_id}"]
-        return []
-
-    # Handle media links within nested records
-    if embed.get("$type") == "app.bsky.embed.recordWithMedia":
-        nested_embeds = []
-        if "record" in embed:
-            nested_embeds.extend(extract_embeds(embed["record"], embed_type, did))
-        if "media" in embed:
-            nested_embeds.extend(extract_embeds(embed["media"], embed_type, did))
-        return nested_embeds
-
-    # If no valid data is found
-    return []
-
-# Function to extract post data
-def extract_post_data(post):
-    if not post:
-        return None
-    record = post.get("record", {})
-    author = post.get("author", {})
-
-    # Construct link to the post itself
-    post_uri = record.get("uri", "")
-    post_link = ""
-    if post_uri.startswith("at://"):
-        profile = post_uri.split("/")[2]
-        post_id = post_uri.split("/")[-1]
-        post_link = f"https://bsky.app/profile/{profile}/post/{post_id}"
-
-    # Construct link to the author's profile
-    handle = author.get("handle", "")
-    handle_link = f"https://bsky.app/profile/{handle}" if handle else ""
-
-    return {
-        "Post Link": post_link,
-        "DID": author.get("did", ""),
-        "Handle": handle_link,
-        "Display Name": author.get("displayName", ""),
-        "CreatedAt": record.get("createdAt", ""),
-        "Text": record.get("text", ""),
-        "Text Post Link": post_link,
-        "ReplyCount": post.get("replyCount", 0),
-        "RepostCount": post.get("repostCount", 0),
-        "LikeCount": post.get("likeCount", 0),
-        "QuoteCount": post.get("quoteCount", 0),
-        "Image Embeds": ", ".join(extract_embeds(record, "image", author.get("did", ""))),
-        "Website Card Embeds": ", ".join(extract_embeds(record, "link")),
-        "Referenced Posts": ", ".join(extract_embeds(record, "record")),
-    }
-
-# Function to process the post, parent, and replies
-def process_thread(post):
-    if not post:
-        return None
-
-    # Extract Target Post
-    target_post = extract_post_data(post)
-
-    # Extract Immediate Parent
-    parent_uri = post.get("record", {}).get("reply", {}).get("parent", {}).get("uri", "")
-    parent_post = None
-    if parent_uri:
-        parent_thread = fetch_thread_details(parent_uri)
-        if parent_thread and "post" in parent_thread:
-            parent_post = extract_post_data(parent_thread["post"])
-
-    # Extract Replies (children of the target post)
-    replies = []
-    thread_details = fetch_thread_details(post.get("uri"))
-    if thread_details and "replies" in thread_details:
-        for reply in thread_details["replies"]:
-            if "post" in reply:
-                replies.append(extract_post_data(reply["post"]))
-
-    return {
-        "Target": target_post,
-        "Parent": parent_post,
-        "Replies": replies,
-    }
-
-# Function to save data to CSV
-def save_to_csv(data, filename):
-    # Flatten data into a grouped structure
-    flat_data = []
-    for thread in data:
-        row = {}
-
-        # Add Target Post
-        if thread["Target"]:
-            for key, value in thread["Target"].items():
-                row[f"Target_{key}"] = value
-
-        # Add Parent Post
-        if thread["Parent"]:
-            for key, value in thread["Parent"].items():
-                row[f"Parent_{key}"] = value
-
-        # Add Replies
-        for i, reply in enumerate(thread["Replies"], start=1):
-            for key, value in reply.items():
-                row[f"Reply_{i}_{key}"] = value
-
-        flat_data.append(row)
-
-    # Dynamically collect all keys (fieldnames) from all rows
-    all_keys = set()
-    for row in flat_data:
-        all_keys.update(row.keys())
-    all_keys = sorted(all_keys)  # Sort for consistent ordering
-
-    # Ensure all rows contain all keys (fill missing fields with None)
-    for row in flat_data:
-        for key in all_keys:
-            if key not in row:
-                row[key] = None
-
-    # Save to CSV
-    with open(filename, "w", newline="", encoding="utf-8") as output_file:
-        dict_writer = csv.DictWriter(output_file, fieldnames=all_keys)
-        dict_writer.writeheader()
-        dict_writer.writerows(flat_data)
-
-    print(f"Data saved to {filename}")
-
-# Main script
-if __name__ == "__main__":
-    variations = ["example", "example variation"]
-    sort = "latest"
-    lang = "en"
-    limit = 100
-
-    # Set date range
-    start_date = datetime(2023, 7, 1)
-    end_date = datetime(2024, 12, 22)
-    delta = timedelta(days=1)
-
-    threads = []
-
-    # Loop through query variations
-    for query in variations:
-        query = f'"{query}"'
-        print(f"Processing query: {query}")
-
-        # Loop through each day
-        current_date = start_date
-        while current_date <= end_date:
-            since = current_date.isoformat() + "Z"
-            until = (current_date + delta).isoformat() + "Z"
-            print(f"Fetching posts from {since} to {until}")
-
-            cursor = None
-            while True:
-                # Fetch posts for the current day
-                posts, cursor = search_bluesky_posts(query, sort, since, until, lang, limit, cursor)
-                if not posts:
-                    print("No more posts for this query and date range.")
+                # Fetch posts
+                response = client.app.bsky.feed.search_posts(params=params)
+                
+                ####################################################
+                # Critical Fixes: Handle API response edge cases
+                ####################################################
+                # 1. Check if response is valid
+                if response is None:
+                    print(f"No response for {day_str}")
+                    break
+                
+                # 2. Check if response has 'posts' attribute
+                if not hasattr(response, 'posts'):
+                    print(f"Malformed response for {day_str}")
+                    break
+                
+                # 3. Check if posts is None or empty
+                if response.posts is None:
+                    print(f"Posts field is None for {day_str}")
+                    break
+                elif not response.posts:
+                    print(f"No posts found for {day_str}")
                     break
 
-                # Process each post
-                for post in posts:
-                    thread_data = process_thread(post)
-                    if thread_data:
-                        threads.append(thread_data)
+                # Process posts
+                for post in response.posts:
+                    record = post.record
+                    author = post.author
+                    
+                    # Extract data
+                    links = []
+                    if hasattr(record, 'facets'):
+                        for facet in record.facets:
+                            for feature in facet.features:
+                                if isinstance(feature, models.AppBskyRichtextFacet.Link):
+                                    links.append(feature.uri)
+                    
+                    media = []
+                    if post.embed and isinstance(post.embed, models.AppBskyEmbedImages.View):
+                        media = [img.image.ref for img in post.embed.images]
+                    
+                    quoted = []
+                    if post.embed and isinstance(post.embed, models.AppBskyEmbedRecord.View):
+                        quoted.append(post.embed.record.uri)
 
+                    posts_data.append({
+                        'author_did': author.did,
+                        'username': author.handle,
+                        'post_text': record.text,
+                        'likes': post.like_count,
+                        'reposts': post.repost_count,
+                        'links': ';'.join(links),
+                        'media': ';'.join(media),
+                        'quoted_posts': ';'.join(quoted),
+                        'post_uri': post.uri,
+                        'post_date': record.created_at
+                    })
+                    daily_count += 1
+
+                print(f"Collected {len(response.posts)} posts for {day_str}")
+                cursor = response.cursor
                 if not cursor:
                     break
-                time.sleep(5)  # Avoid rate-limiting
+                
+                time.sleep(1)  # Rate limiting
 
-            current_date += delta
+            except Exception as e:
+                print(f"Error: {e}")
+                break
+        
+        print(f"Total for {day_str}: {daily_count} posts")
+        current_date += timedelta(days=1)
+        time.sleep(2)  # Daily buffer
 
-    # Save to CSV
-    save_to_csv(threads, "bluesky_raw_data.csv")
-    print("Script complete.")
+    return posts_data
+
+def save_to_csv(data):
+    filename = f"moderation_posts_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
+    fieldnames = [
+        'author_did', 'username', 'post_text', 'likes', 
+        'reposts', 'links', 'media', 'quoted_posts', 
+        'post_uri', 'post_date'
+    ]
+    
+    with open(filename, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(data)
+    
+    print(f"Saved {len(data)} posts to {filename}")
+
+if __name__ == "__main__":
+    # Set date range: Nov 1, 2024 - Feb 28, 2025
+    start_date = datetime(2024, 11, 1)
+    end_date = datetime(2025, 2, 28)
+    
+    client = Client()
+    if login_bluesky(client):
+        posts = fetch_dated_posts(client, start_date, end_date)
+        if posts:
+            save_to_csv(posts)
+        else:
+            print("No posts found in date range")
